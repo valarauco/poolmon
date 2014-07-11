@@ -104,6 +104,7 @@ Arguments:
   -i, --interval=SECS   Scan interval in seconds (default: 30)
   -k, --lockfile=PATH   PID/lockfile location (default: /var/run/poolmon.pid)
   -l, --logfile=PATH    Log file location (default: /var/log/poolmon.log)
+                        Set to 'stdio' for writing to stdout and stderr
   -p, --port=PORT       Port to check; repeat for multiple (default: 110, 143)
   -s  --ssl=PORT        Port with SSL/TLS; repeat for multiple (default: none)
                         If the port is recognized as common IMAP or POP3 port,
@@ -482,8 +483,10 @@ sub daemonize {
     chdir('/')         or die "Can't chdir to /: $!";
     umask(0);
     open(STDIN, '</dev/null')  or die "Can't read /dev/null: $!";
-    open(STDOUT, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
-    open(STDERR, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+    if ($LOGFILE ne "stdio") {
+        open(STDOUT, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+        open(STDERR, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+    }
     defined(my $pid = fork())  or die "Can't fork: $!";
     $pid && exit(0);
     setsid()           or die "Can't start a new session: $!";
@@ -495,9 +498,11 @@ sub daemonize {
 
     # Reopen logfiles and reparse weights on HUP
     $SIG{'HUP'} = sub {
-        open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-        open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-        write_log("Logfile reopened");
+        if ($LOGFILE ne "stdio") {
+            open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
+            open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
+            write_log("Logfile reopened");
+        }
         load_weights();
         load_credentials();
     }
