@@ -44,6 +44,8 @@ my $DIRECTOR = '/var/run/dovecot/director-admin';
 my $CREDFILE = '';
 my $USERNAME = '';
 my $PASSWORD = '';
+my $LMTP_FROM = '';
+my $LMTP_TO = '';
 my $WEIGHTS;
 my %WEIGHTS;
 
@@ -60,6 +62,8 @@ GetOptions('p|port=s'     => \@PORTS,
            'h|help|?'     => \&help,
            'w|weights=s'  => \&opt_weights,
            'c|credfile=s' => \&opt_credfile,
+           'lmtp-from=s'  => \$LMTP_FROM,
+           'lmtp-to=s'    => \$LMTP_TO,
     ) or help();
 
 unless (@PORTS || @SSL_PORTS){
@@ -116,7 +120,9 @@ Arguments:
                           - Username on 1st line.
                           - Password on 2nd line.
                         (default: health checks will not attempt authentication)
-  -S, --socket=PATH     Path to Dovecot director-admin socket 
+  --lmtp-from=ADDR      Sender e-mail address for LMTP
+  --lmtp-to=ADDR        Recipient e-mail address for LMTP
+  -S, --socket=PATH     Path to Dovecot director-admin socket
                         (default: /var/run/dovecot/director-admin)
   -t, --timeout=SECS    Port health check timeout in seconds (default: 5)
   -w, --weights=PATH    Location of file containing host:weight lines
@@ -232,6 +238,8 @@ sub scan_port {
                 return scan_imap($host, $port, $sock);
             } elsif ($prot eq 'POP3'){
                 return scan_pop3($host, $port, $sock);
+            } elsif ($prot eq 'LMTP'){
+                return scan_lmtp($host, $port, $sock);
             } elsif (readline($sock)){
                 $DEBUG && write_log("$host:$port Connection OK");
                 return 1
@@ -313,6 +321,39 @@ sub scan_pop3 {
     }
 }
 
+sub scan_lmtp {
+    my $host = shift || return;
+    my $port = shift || return;
+    my $sock = shift || return;
+    my $line = readline($sock);
+    if ($line =~ m/^2\d\d /){
+        if ($LMTP_TO){
+            printf $sock "MAIL FROM:<%s>\r\n", $LMTP_FROM;
+            my $mailreply = readline($sock);
+            if ($mailreply !~ m/^2\d\d /){
+                write_err("$host:$port LMTP Server Rejects sender address");
+                return 0;
+            }
+
+            printf $sock "RCPT TO:<%s>\r\n", $LMTP_TO;
+            my $mailreply = readline($sock);
+            if ($mailreply !~ m/^2\d\d /){
+                write_err("$host:$port LMTP Server Rejects recipient address");
+                return 0;
+            }
+
+            $DEBUG && write_log("$host:$port LMTP OK");
+            return 1;
+        } else {
+            $DEBUG && write_log("$host:$port LMTP Banner OK");
+            return 1;
+        }
+    } else {
+        $DEBUG && write_log("$host:$port LMTP Banner Check Failed");
+        return 0;
+    }
+}
+
 # Extract port and protocol from combined port command-line option
 sub get_port_proto {
     my $port = shift;
@@ -323,6 +364,9 @@ sub get_port_proto {
     } elsif ($port == 110 || $port == 995 || $port =~ m/POP3:(\d+)/i){
         $port = $1 ? $1 : $port;
         return $port, 'POP3';
+    } elsif ($port == 24 || $port =~ m/LMTP:(\d+)/i){
+        $port = $1 ? $1 : $port;
+        return $port, 'LMTP';
     } else {
         return $port, 'UNKNOWN';
     }
