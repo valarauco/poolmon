@@ -353,12 +353,12 @@ sub enable_host {
 
 # Append a line to stdout
 sub write_log {
-    printf(STDOUT "%s LOG %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    printf(STDOUT "INFO: %s\n", join('', @_));
 }
 
 # Append a line to stderr
 sub write_err {
-    printf(STDERR "%s ERR %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    printf(STDERR "ERROR: %s\n", join('', @_));
 }
 
 # Check to see if the pidfile exists and the indicated pid is still running
