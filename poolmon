@@ -370,7 +370,7 @@ sub check_pidfile {
         my $oldpid = readline($FH);
         close($FH);
         chomp $oldpid;
-        if (-d "/proc/$oldpid"){
+        if (kill(0, $oldpid)){
             write_err("Already running as pid $oldpid");
             exit(1);
         }
