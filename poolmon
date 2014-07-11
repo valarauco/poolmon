@@ -27,7 +27,6 @@ use strict;
 use Getopt::Long;
 use IO::Socket::UNIX;
 use IO::Socket::INET;
-use IO::Socket::SSL;
 use POSIX qw(setsid strftime);
 
 $SIG{'PIPE'} = 'IGNORE';
@@ -65,6 +64,13 @@ GetOptions('p|port=s'     => \@PORTS,
 
 unless (@PORTS || @SSL_PORTS){
     @PORTS = qw(110 143);
+}
+
+if (@SSL_PORTS) {
+    eval("use IO::Socket::SSL;");
+    if ($@) {
+        die "$@";
+    }
 }
 
 check_pidfile();
