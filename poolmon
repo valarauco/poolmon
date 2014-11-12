@@ -27,7 +27,6 @@ use strict;
 use Getopt::Long;
 use IO::Socket::UNIX;
 use IO::Socket::INET;
-use IO::Socket::SSL;
 use POSIX qw(setsid strftime);
 
 $SIG{'PIPE'} = 'IGNORE';
@@ -45,6 +44,8 @@ my $DIRECTOR = '/var/run/dovecot/director-admin';
 my $CREDFILE = '';
 my $USERNAME = '';
 my $PASSWORD = '';
+my $LMTP_FROM = '';
+my $LMTP_TO = '';
 my $WEIGHTS;
 my %WEIGHTS;
 
@@ -61,10 +62,19 @@ GetOptions('p|port=s'     => \@PORTS,
            'h|help|?'     => \&help,
            'w|weights=s'  => \&opt_weights,
            'c|credfile=s' => \&opt_credfile,
+           'lmtp-from=s'  => \$LMTP_FROM,
+           'lmtp-to=s'    => \$LMTP_TO,
     ) or help();
 
 unless (@PORTS || @SSL_PORTS){
     @PORTS = qw(110 143);
+}
+
+if (@SSL_PORTS) {
+    eval("use IO::Socket::SSL;");
+    if ($@) {
+        die "$@";
+    }
 }
 
 check_pidfile();
@@ -98,6 +108,7 @@ Arguments:
   -i, --interval=SECS   Scan interval in seconds (default: 30)
   -k, --lockfile=PATH   PID/lockfile location (default: /var/run/poolmon.pid)
   -l, --logfile=PATH    Log file location (default: /var/log/poolmon.log)
+                        Set to 'stdio' for writing to stdout and stderr
   -p, --port=PORT       Port to check; repeat for multiple (default: 110, 143)
   -s  --ssl=PORT        Port with SSL/TLS; repeat for multiple (default: none)
                         If the port is recognized as common IMAP or POP3 port,
@@ -109,7 +120,9 @@ Arguments:
                           - Username on 1st line.
                           - Password on 2nd line.
                         (default: health checks will not attempt authentication)
-  -S, --socket=PATH     Path to Dovecot director-admin socket 
+  --lmtp-from=ADDR      Sender e-mail address for LMTP
+  --lmtp-to=ADDR        Recipient e-mail address for LMTP
+  -S, --socket=PATH     Path to Dovecot director-admin socket
                         (default: /var/run/dovecot/director-admin)
   -t, --timeout=SECS    Port health check timeout in seconds (default: 5)
   -w, --weights=PATH    Location of file containing host:weight lines
@@ -225,6 +238,8 @@ sub scan_port {
                 return scan_imap($host, $port, $sock);
             } elsif ($prot eq 'POP3'){
                 return scan_pop3($host, $port, $sock);
+            } elsif ($prot eq 'LMTP'){
+                return scan_lmtp($host, $port, $sock);
             } elsif (readline($sock)){
                 $DEBUG && write_log("$host:$port Connection OK");
                 return 1
@@ -306,6 +321,39 @@ sub scan_pop3 {
     }
 }
 
+sub scan_lmtp {
+    my $host = shift || return;
+    my $port = shift || return;
+    my $sock = shift || return;
+    my $line = readline($sock);
+    if ($line =~ m/^2\d\d /){
+        if ($LMTP_TO){
+            printf $sock "MAIL FROM:<%s>\r\n", $LMTP_FROM;
+            my $mailreply = readline($sock);
+            if ($mailreply !~ m/^2\d\d /){
+                write_err("$host:$port LMTP Server Rejects sender address");
+                return 0;
+            }
+
+            printf $sock "RCPT TO:<%s>\r\n", $LMTP_TO;
+            my $mailreply = readline($sock);
+            if ($mailreply !~ m/^2\d\d /){
+                write_err("$host:$port LMTP Server Rejects recipient address");
+                return 0;
+            }
+
+            $DEBUG && write_log("$host:$port LMTP OK");
+            return 1;
+        } else {
+            $DEBUG && write_log("$host:$port LMTP Banner OK");
+            return 1;
+        }
+    } else {
+        $DEBUG && write_log("$host:$port LMTP Banner Check Failed");
+        return 0;
+    }
+}
+
 # Extract port and protocol from combined port command-line option
 sub get_port_proto {
     my $port = shift;
@@ -316,6 +364,9 @@ sub get_port_proto {
     } elsif ($port == 110 || $port == 995 || $port =~ m/POP3:(\d+)/i){
         $port = $1 ? $1 : $port;
         return $port, 'POP3';
+    } elsif ($port == 24 || $port =~ m/LMTP:(\d+)/i){
+        $port = $1 ? $1 : $port;
+        return $port, 'LMTP';
     } else {
         return $port, 'UNKNOWN';
     }
@@ -347,12 +398,12 @@ sub enable_host {
 
 # Append a line to stdout
 sub write_log {
-    printf(STDOUT "%s LOG %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    printf(STDOUT "INFO: %s\n", join('', @_));
 }
 
 # Append a line to stderr
 sub write_err {
-    printf(STDERR "%s ERR %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    printf(STDERR "ERROR: %s\n", join('', @_));
 }
 
 # Check to see if the pidfile exists and the indicated pid is still running
@@ -363,7 +414,7 @@ sub check_pidfile {
         my $oldpid = readline($FH);
         close($FH);
         chomp $oldpid;
-        if (-d "/proc/$oldpid"){
+        if (kill(0, $oldpid)){
             write_err("Already running as pid $oldpid");
             exit(1);
         }
@@ -476,8 +527,10 @@ sub daemonize {
     chdir('/')         or die "Can't chdir to /: $!";
     umask(0);
     open(STDIN, '</dev/null')  or die "Can't read /dev/null: $!";
-    open(STDOUT, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
-    open(STDERR, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+    if ($LOGFILE ne "stdio") {
+        open(STDOUT, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+        open(STDERR, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
+    }
     defined(my $pid = fork())  or die "Can't fork: $!";
     $pid && exit(0);
     setsid()           or die "Can't start a new session: $!";
@@ -489,9 +542,11 @@ sub daemonize {
 
     # Reopen logfiles and reparse weights on HUP
     $SIG{'HUP'} = sub {
-        open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-        open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-        write_log("Logfile reopened");
+        if ($LOGFILE ne "stdio") {
+            open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
+            open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
+            write_log("Logfile reopened");
+        }
         load_weights();
         load_credentials();
     }
