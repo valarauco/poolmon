@@ -26,8 +26,9 @@
 use strict;
 use Getopt::Long;
 use IO::Socket::UNIX;
-use IO::Socket::INET;
+use IO::Socket::IP;
 use POSIX qw(setsid strftime);
+use Sys::Syslog qw( :DEFAULT setlogsock);
 
 $SIG{'PIPE'} = 'IGNORE';
 
@@ -108,7 +109,7 @@ Arguments:
   -i, --interval=SECS   Scan interval in seconds (default: 30)
   -k, --lockfile=PATH   PID/lockfile location (default: /var/run/poolmon.pid)
   -l, --logfile=PATH    Log file location (default: /var/log/poolmon.log)
-                        Set to 'stdio' for writing to stdout and stderr
+                        Set to 'syslog' for writing to local syslog socket
   -p, --port=PORT       Port to check; repeat for multiple (default: 110, 143)
   -s  --ssl=PORT        Port with SSL/TLS; repeat for multiple (default: none)
                         If the port is recognized as common IMAP or POP3 port,
@@ -221,7 +222,7 @@ sub scan_port {
     my $host = shift || return;
     my $port = shift || return;
     my $ssl  = shift;
-    my $sock = $ssl ? IO::Socket::SSL : IO::Socket::INET;
+    my $sock = $ssl ? IO::Socket::SSL : IO::Socket::IP;
     my $prot;
     my $ret;
 
@@ -398,12 +399,31 @@ sub enable_host {
 
 # Append a line to stdout
 sub write_log {
-    printf(STDOUT "INFO: %s\n", join('', @_));
+    if ($LOGFILE eq "syslog") {
+        write_to_syslog("info", join('', @_));
+    } else {
+        printf(STDOUT "%s LOG %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    }
 }
 
 # Append a line to stderr
 sub write_err {
-    printf(STDERR "ERROR: %s\n", join('', @_));
+    if ($LOGFILE eq "syslog") {
+        write_to_syslog("err", join('', @_));
+    } else {
+        printf(STDERR "%s ERR %s\n", strftime("%h %d %H:%M:%S", localtime()), join('', @_));
+    }
+}
+
+sub write_to_syslog {
+    my ($priority, $msg) = @_;
+    return 0 unless ($priority =~ /info|err|debug/);
+
+    setlogsock("unix");
+    openlog("poolmon", "pid,cons", "user");
+    syslog($priority, $msg);
+    closelog();
+    return 1;
 }
 
 # Check to see if the pidfile exists and the indicated pid is still running
@@ -527,7 +547,7 @@ sub daemonize {
     chdir('/')         or die "Can't chdir to /: $!";
     umask(0);
     open(STDIN, '</dev/null')  or die "Can't read /dev/null: $!";
-    if ($LOGFILE ne "stdio") {
+    if ($LOGFILE ne "syslog") {
         open(STDOUT, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
         open(STDERR, ">>$LOGFILE") or die "Can't write to $LOGFILE: $!";
     }
@@ -542,13 +562,12 @@ sub daemonize {
 
     # Reopen logfiles and reparse weights on HUP
     $SIG{'HUP'} = sub {
-        if ($LOGFILE ne "stdio") {
-            open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-            open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
-            write_log("Logfile reopened");
+        if ($LOGFILE ne "syslog") {
+          open(STDOUT, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
+          open(STDERR, ">>$LOGFILE") or die "Can't reopen $LOGFILE: $!";
         }
+        write_log("Logfile reopened");
         load_weights();
         load_credentials();
     }
 }
-
