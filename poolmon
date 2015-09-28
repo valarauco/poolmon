@@ -194,23 +194,35 @@ sub director_connect {
     return $sock;
 }
 
-# Scan all ports on a given host
+# Scan all ports on a given host. 1 == success. 0 == failure
 sub scan_host {
     my ($host, $weight) = @_;
     my $OK = 1;
     # Check non-SSL ports first
     foreach my $port (@PORTS){
         if (! scan_port($host, $port, 0)){
-            $OK = 0;
-            last;
+            sleep(3);
+            for (my $i=0; $i <= 3; $i++) {
+                if (! scan_port($host, $port, 0)){
+                    $OK = 0;
+                    last;
+                }
+                sleep(0.5);
+           }
         }
     }
     # Skip SSL checks if standard checks indicated failure
     return 0 unless $OK;
     foreach my $port (@SSL_PORTS){
         if (! scan_port($host, $port, 1)){
-            $OK = 0;
-            last;
+            sleep(3);
+            for (my $i=0; $i <= 3; $i++) {
+                if (! scan_port($host, $port, 1)){
+                    $OK = 0;
+                    last;
+                }
+                sleep(0.5);
+           }
         }
     }
     return $OK;
